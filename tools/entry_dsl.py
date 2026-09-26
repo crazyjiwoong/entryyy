@@ -185,6 +185,16 @@ def list_len(list_name):
     return B("length_of_list", [None, R.list_id(list_name), None])
 
 
+def sin_(a):
+    """sin (각도는 도 단위)."""
+    return op(a, "sin")
+
+
+def self_value(kind):
+    """자신의 x좌표값 / y좌표값 / 크기 / 방향 ... (coordinate_object)."""
+    return B("coordinate_object", [None, "self", None, kind])
+
+
 def picture(pid):
     return B("get_pictures", [pid])
 
@@ -249,6 +259,15 @@ def chg(name, value):
 
 def set_item(list_name, index, value):
     return B("change_value_list_index", [R.list_id(list_name), _val(index), _val(value), None])
+
+
+def push_item(list_name, value):
+    """리스트 맨 뒤에 항목 추가."""
+    return B("add_value_to_list", [_val(value), R.list_id(list_name), None])
+
+
+def remove_item(list_name, index):
+    return B("remove_value_from_list", [_val(index), R.list_id(list_name), None])
 
 
 def if_(cond, body):
@@ -327,6 +346,19 @@ def shape_id(pid):
 
 def next_shape():
     return B("change_to_next_shape", ["next", None])
+
+
+def set_size(value):
+    return B("set_scale_size", [_val(value), None])
+
+
+def change_size(value):
+    return B("change_scale_size", [_val(value), None])
+
+
+def rotate_to(value):
+    """방향을 ~(으)로 정하기 (회전 방식이 '자유 회전'일 때 그림이 돌아간다)."""
+    return B("rotate_absolute", [_val(value), None])
 
 
 def set_effect(effect, value):

@@ -41,6 +41,10 @@ def jump():
     return _tone([330, 560, 780], 0.13, 0.22, "square", 0.05)
 
 
+def double_jump():
+    return np.concatenate([_tone([520, 1040], 0.07, 0.2, "square", 0.02), _tone([990, 1480], 0.12, 0.18, "sine", 0.08)])
+
+
 def land():
     t = _t(0.14)
     noise = np.random.default_rng(1).uniform(-1, 1, len(t)) * np.exp(-t * 45) * 0.25
@@ -87,6 +91,7 @@ def to_mp3(samples):
 
 SOUNDS = {
     "점프": jump,
+    "2단점프": double_jump,
     "착지": land,
     "삐": beep,
     "출발": go,

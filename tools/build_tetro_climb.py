@@ -37,6 +37,7 @@ from entry_dsl import (  # noqa: E402
     broadcast,
     broadcast_wait,
     call,
+    change_size,
     chg,
     clear_effects,
     create_clone_self,
@@ -67,16 +68,23 @@ from entry_dsl import (  # noqa: E402
     not_,
     or_,
     play,
+    push_item,
     rand,
+    remove_item,
+    list_len,
     repeat,
     repeat_while,
+    rotate_to,
     round_,
+    self_value,
     set_effect,
     set_item,
+    set_size,
     setv,
     shape,
     shape_id,
     show,
+    sin_,
     sub,
     thread,
     v,
@@ -99,7 +107,8 @@ X_OFF = -6 * CELL  # 월드 x -> 무대 x (0번 칸 왼쪽 = -108)
 HALF_W = 7  # 플레이어 판정 반폭
 PLAYER_H = 14  # 플레이어 판정 높이
 GRAVITY = 0.44
-JUMP_V = 6.8
+JUMP_V = 6.8  # 첫 점프
+AIR_JUMP_V = 6.2  # 공중에서 한 번 더 (2단 점프)
 MAX_FALL = 8
 MOVE_V = 2.4
 
@@ -154,7 +163,7 @@ class Assets:
 A = Assets()
 
 
-def sprite_object(obj_id, name, pictures, sounds, x=0, y=0, visible=True, scale=0.5):
+def sprite_object(obj_id, name, pictures, sounds, x=0, y=0, visible=True, scale=0.5, rotate="none"):
     first = pictures[0]
     w, h = first["dimension"]["width"], first["dimension"]["height"]
     return {
@@ -162,7 +171,7 @@ def sprite_object(obj_id, name, pictures, sounds, x=0, y=0, visible=True, scale=
         "name": name,
         "script": "[]",
         "objectType": "sprite",
-        "rotateMethod": "none",
+        "rotateMethod": rotate,
         "scene": SCENE_ID,
         "sprite": {"pictures": pictures, "sounds": sounds},
         "selectedPictureId": first["id"],
@@ -223,7 +232,7 @@ def text_object(obj_id, name, text, x, y, size, colour, visible=True, font_famil
 # ================================================================ 오브젝트 id / 그림
 OID = {k: gid() for k in [
     "manager", "overlay", "result", "score", "best", "dist",
-    "mk_me", "mk_best", "mk_poison", "poison", "player", "piece", "floor", "bg",
+    "mk_me", "mk_best", "mk_poison", "poison", "dust", "player", "piece", "floor", "bg",
 ]}
 
 STATES = art.piece_states()  # 19가지 (종류, 회전, 칸, 폭, 높이)
@@ -243,14 +252,20 @@ PIC["overlay"] = [
 PIC["mk_me"] = [A.picture("나", art.marker_player())]
 PIC["mk_best"] = [A.picture("최고", art.marker_best())]
 PIC["mk_poison"] = [A.picture("독극물", art.marker_poison())]
-PIC["poison"] = [A.picture(f"독극물_{i + 1}", art.poison_image(i)) for i in range(4)]
+PIC["poison"] = [A.picture(f"독극물_{i + 1}", art.poison_image(i)) for i in range(art.POISON_FRAMES)]
+# 1,2 서기 / 3,4 점프(늘어남) / 5,6 착지(찌그러짐) / 7,8 걷기 / 9 쓰러짐  (홀수 = 오른쪽, 짝수 = 왼쪽)
 PIC["player"] = [
-    A.picture("오른쪽", art.player_image(1, False)),
-    A.picture("왼쪽", art.player_image(-1, False)),
-    A.picture("점프_오른쪽", art.player_image(1, True)),
-    A.picture("점프_왼쪽", art.player_image(-1, True)),
-    A.picture("쓰러짐", art.player_image(1, False, dead=True)),
+    A.picture("서기_오른쪽", art.player_image(1, "normal")),
+    A.picture("서기_왼쪽", art.player_image(-1, "normal")),
+    A.picture("점프_오른쪽", art.player_image(1, "stretch")),
+    A.picture("점프_왼쪽", art.player_image(-1, "stretch")),
+    A.picture("착지_오른쪽", art.player_image(1, "squash")),
+    A.picture("착지_왼쪽", art.player_image(-1, "squash")),
+    A.picture("걷기_오른쪽", art.player_image(1, "walk")),
+    A.picture("걷기_왼쪽", art.player_image(-1, "walk")),
+    A.picture("쓰러짐", art.player_image(1, "dead")),
 ]
+PIC["dust"] = [A.picture("먼지", art.dust_puff()), A.picture("고리", art.dust_ring())]
 _falling, _landed = [], []
 for kind, rot, cells, w, h in STATES:
     color = art.PIECE_COLORS[kind]
@@ -261,7 +276,7 @@ PIC["floor"] = [A.picture("바닥", art.floor_image())]
 PIC["bg"] = [A.picture("배경", art.background_image())]
 
 SND = {
-    "manager": [A.sound("점프"), A.sound("게임오버"), A.sound("신기록")],
+    "manager": [A.sound("점프"), A.sound("2단점프"), A.sound("게임오버"), A.sound("신기록")],
     "overlay": [A.sound("삐"), A.sound("출발")],
     "piece": [A.sound("착지")],
 }
@@ -276,38 +291,116 @@ def snd_id(obj, name):
 
 
 # ================================================================ 변수 / 리스트 / 신호
-GLOBAL_VARS = [
-    ("상태", 0), ("점수", 0), ("최고점수", 0), ("신기록", 0),
-    ("플레이어X", 108), ("플레이어Y", 18), ("방향", 1), ("땅에닿음", 1),
-    ("카메라Y", 0), ("독극물Y", -45), ("맨위줄", -1), ("최고블록줄", 0),
-    ("낙하속도", 1.5), ("죽음원인", 0), ("게이지최대", 40), ("프레임", 0),
+# 엔트리는 변수를 '변수 목록 앞에서부터' 찾기 때문에, 매 프레임 많은 복제본이 읽는 변수를 앞에 둔다.
+# (이름, 처음 값, 지역 변수라면 오브젝트)
+VARIABLES = [
+    ("카메라Y", 0, None),
+    ("독극물Y", POISON_START, None),
+    ("중심Y", 0, "piece"),
+    ("윗면", 0, "piece"),
+    ("블록상태", 0, "piece"),
+    ("상태", 0, None),
+    ("바닥Y", 0, "piece"),
+    ("블록높이", 0, "piece"),
+    ("낙하속도", 1.5, None),
+    ("플레이어X", 108, None),
+    ("플레이어Y", 18, None),
+    ("블록열", 0, "piece"),
+    ("블록폭", 0, "piece"),
+    ("다음Y", 0, "piece"),
+    ("기준줄", 0, "piece"),
+    *[(f"칸X{i}", 0, "piece") for i in range(1, 5)],
+    *[(f"칸Y{i}", 0, "piece") for i in range(1, 5)],
+    ("속도X", 0, None),
+    ("속도Y", 0, None),
+    ("땅에닿음", 1, None),
+    ("방향", 1, None),
+    ("새X", 0, None),
+    ("새Y", 0, None),
+    ("줄", 0, None),
+    ("기준", 0, None),
+    ("칸", 0, None),
+    ("왼칸", 0, None),
+    ("오른칸", 0, None),
+    ("줄아래", 0, None),
+    ("줄위", 0, None),
+    ("기준아래", 0, None),
+    ("기준위", 0, None),
+    ("목표속도", 0, None),
+    ("점프누름", 0, None),
+    ("점프버퍼", 0, None),
+    ("코요테", 0, None),
+    ("점프횟수", 0, None),
+    ("이전플레이어Y", 18, None),
+    ("목표카메라", 0, None),
+    ("현재높이", 0, None),
+    ("점수", 0, None),
+    ("최고점수", 0, None),
+    ("독극물속도", 0.06, None),
+    ("맨위줄", -1, None),
+    ("필요높이", 0, None),
+    ("최고블록줄", 0, None),
+    ("프레임", 0, None),
+    ("게이지최대", 40, None),
+    # 떨어지는 블록이 플레이어를 밀어낼 때 쓰는 계산용 변수
+    ("칸왼쪽", 0, None),
+    ("칸아래", 0, None),
+    ("밀위", 0, None),
+    ("밀아래", 0, None),
+    ("밀왼", 0, None),
+    ("밀오른", 0, None),
+    ("밀방향", 0, None),
+    ("최소밀기", 0, None),
+    ("끼임줄1", 0, None),
+    ("끼임줄2", 0, None),
+    ("끼임칸1", 0, None),
+    ("끼임칸2", 0, None),
+    # 먼지 효과 부탁하기
+    ("먼지요청X", 0, None),
+    ("먼지요청Y", 0, None),
+    ("먼지요청종류", 0, None),
+    ("회전요청", 0, None),
+    ("줄기준", 0, None),
+    ("채움값", 0, None),
+    ("흔들기준", 0, None),
+    ("죽음원인", 0, None),
+    ("신기록", 0, None),
+    # 블록 원본이 새 블록을 고를 때만 쓰는 변수
+    ("블록모양", 0, "piece"),
+    ("생성거리", 0, "piece"),
+    ("다음생성거리", 0, "piece"),
+    ("마지막블록Y", 0, "piece"),
+    ("생성Y", 0, "piece"),
+    ("기둥높이", 0, "piece"),
+    # 먼지 복제본
+    ("먼지월드X", 0, "dust"),
+    ("먼지월드Y", 0, "dust"),
+    ("먼지vx", 0, "dust"),
+    ("먼지vy", 0, "dust"),
+    ("먼지종류값", 0, "dust"),
+    # 플레이어 모습
+    ("모양번호", 0, "player"),
+    ("이전모양", 0, "player"),
+    ("회전", 0, "player"),
+    ("스핀", 0, "player"),
+    ("스핀방향", 1, "player"),
+    ("찌그러짐", 0, "player"),
+    ("걷기타이머", 0, "player"),
+    ("이전땅", 1, "player"),
+    ("이전속도Y", 0, "player"),
+    # 화면 표시
+    ("깜빡", 0, "overlay"),
+    ("표시점수", 0, "score"),
+    ("표시최고", 0, "best"),
+    ("거리타이머", 0, "dist"),
+    ("비율_나", 0, "mk_me"),
+    ("비율_최고", 0, "mk_best"),
+    ("비율_독", 0, "mk_poison"),
+    ("물결타이머", 0, "poison"),
+    ("적용회전", 0, "player"),
 ]
-# 게임 관리자의 함수들이 쓰는 계산용 변수 (함수는 모든 오브젝트에서 보이므로 전역 변수로 둔다)
-GLOBAL_VARS += [(n, 0) for n in [
-    "속도X", "속도Y", "목표속도", "점프누름", "점프버퍼", "코요테", "새X", "새Y", "칸", "왼칸", "오른칸",
-    "줄", "기준", "줄아래", "줄위", "기준아래", "기준위", "줄기준", "채움값", "필요높이", "현재높이",
-    "목표카메라", "독극물속도",
-]]
-for name, value in GLOBAL_VARS:
-    add_variable(name, value)
-
-LOCAL_VARS = {
-    "piece": ["블록모양", "블록폭", "블록높이", "블록열", "바닥Y", "다음Y", "기준줄", "블록상태",
-              "칸X1", "칸X2", "칸X3", "칸X4", "칸Y1", "칸Y2", "칸Y3", "칸Y4", "중심Y", "윗면",
-              "생성거리", "다음생성거리", "마지막블록Y", "생성Y", "기둥높이"],
-    "overlay": ["깜빡"],
-    "score": ["표시점수"],
-    "best": ["표시최고"],
-    "dist": ["거리타이머"],
-    "mk_me": ["비율_나"],
-    "mk_best": ["비율_최고"],
-    "mk_poison": ["비율_독"],
-    "poison": ["물결타이머"],
-    "player": ["모양번호", "이전모양"],
-}
-for obj, names in LOCAL_VARS.items():
-    for name in names:
-        add_variable(name, 0, object_id=OID[obj])
+for name, value, obj in VARIABLES:
+    add_variable(name, value, object_id=OID[obj] if obj else None)
 
 # 격자: 96줄 x 12칸. 양 끝 칸(0, 11)은 항상 1(벽)
 add_list("격자", ([1] + [0] * 10 + [1]) * RING)
@@ -317,6 +410,10 @@ add_list("모양X", [x for _, _, cells, _, _ in STATES for x, _ in cells])
 add_list("모양Y", [y for _, _, cells, _, _ in STATES for _, y in cells])
 add_list("모양폭", [w for *_, w, _ in STATES])
 add_list("모양높이", [h for *_, h in STATES])
+# 먼지 효과 대기열 (x, y, 종류). 먼지 오브젝트가 한 프레임에 하나씩 꺼내 쓴다
+add_list("먼지X", [])
+add_list("먼지Y", [])
+add_list("먼지종류", [])
 
 for m in ["타이틀", "게임 준비", "카운트다운", "게임 시작", "게임 끝"]:
     add_message(m)
@@ -366,8 +463,11 @@ def fn_reset():
             setv("코요테", 0),
             setv("카메라Y", 0),
             setv("목표카메라", 0),
+            setv("점프횟수", 0),
+            setv("회전요청", 0),
+            setv("이전플레이어Y", CELL),
             setv("독극물Y", POISON_START),
-            setv("독극물속도", 0.05),
+            setv("독극물속도", 0.06),
             setv("최고블록줄", 0),
             setv("맨위줄", -1),
             setv("낙하속도", 1.5),
@@ -378,9 +478,25 @@ def fn_reset():
     )
 
 
+def dust_request(x, y, kind):
+    return [setv("먼지요청X", x), setv("먼지요청Y", y), setv("먼지요청종류", kind), call("먼지 부탁하기")]
+
+
+def fn_dust():
+    define_function(
+        "먼지 부탁하기",
+        [
+            push_item("먼지X", v("먼지요청X")),
+            push_item("먼지Y", v("먼지요청Y")),
+            push_item("먼지종류", v("먼지요청종류")),
+        ],
+    )
+
+
 def fn_input():
     """방향키로 목표 속도를 정하고, 점프 키는 '누른 순간'을 6프레임 동안 기억한다(점프 버퍼).
-    땅에서 떨어진 직후 6프레임 동안도 점프할 수 있다(코요테 타임). 점프 키를 일찍 떼면 낮게 뛴다."""
+    땅에서 떨어진 직후 6프레임 동안도 점프할 수 있다(코요테 타임). 점프 키를 일찍 떼면 낮게 뛴다.
+    공중에서는 한 번 더 점프할 수 있다(2단 점프)."""
     define_function(
         "키 입력 처리",
         [
@@ -397,14 +513,36 @@ def fn_input():
                 [setv("점프누름", 0), if_(gt(v("속도Y"), 2.5), [setv("속도Y", mul(v("속도Y"), 0.55))])],
             ),
             chg("점프버퍼", -1),
-            if_else(eq(v("땅에닿음"), 1), [setv("코요테", 6)], [chg("코요테", -1)]),
+            if_else(eq(v("땅에닿음"), 1), [setv("코요테", 6), setv("점프횟수", 0)], [chg("코요테", -1)]),
             if_(
-                and_(gt(v("점프버퍼"), 0), gt(v("코요테"), 0)),
+                gt(v("점프버퍼"), 0),
                 [
-                    setv("속도Y", JUMP_V),
-                    setv("점프버퍼", 0),
-                    setv("코요테", 0),
-                    play(snd_id("manager", "점프")),
+                    if_else(
+                        gt(v("코요테"), 0),
+                        [
+                            # 땅(또는 떨어지는 블록 위)에서 점프
+                            setv("속도Y", JUMP_V),
+                            setv("점프횟수", 1),
+                            setv("점프버퍼", 0),
+                            setv("코요테", 0),
+                            play(snd_id("manager", "점프")),
+                            *dust_request(v("플레이어X"), v("플레이어Y"), 2),
+                        ],
+                        [
+                            # 공중에서 한 번 더 (2단 점프)
+                            if_(
+                                lt(v("점프횟수"), 2),
+                                [
+                                    setv("속도Y", AIR_JUMP_V),
+                                    setv("점프횟수", 2),
+                                    setv("점프버퍼", 0),
+                                    setv("회전요청", 1),
+                                    play(snd_id("manager", "2단점프")),
+                                    *dust_request(v("플레이어X"), v("플레이어Y"), 3),
+                                ],
+                            )
+                        ],
+                    )
                 ],
             ),
         ],
@@ -506,7 +644,7 @@ def fn_poison():
     define_function(
         "독극물 올리기",
         [
-            setv("독극물속도", add(0.05, div(v("프레임"), 90000))),
+            setv("독극물속도", add(0.06, div(v("프레임"), 90000))),
             if_(gt(v("독극물속도"), 0.32), [setv("독극물속도", 0.32)]),
             setv("독극물Y", add(v("독극물Y"), v("독극물속도"))),
             if_(
@@ -602,29 +740,125 @@ def piece_fall_blocks():
                     ],
                     if_(gt(landed_top, v("최고블록줄")), [setv("최고블록줄", landed_top)]),
                     setv("블록상태", 1),
+                    *dust_request(mul(add(v("블록열"), div(v("블록폭"), 2)), CELL), v("바닥Y"), 4),
                 ],
                 [setv("바닥Y", v("다음Y"))],
             ),
     ]
 
 
-def piece_hit_blocks():
-    """떨어지는 블록의 네 칸 중 하나라도 플레이어와 겹치면 게임 끝 (먼저 전체 네모로 빠르게 거른다)."""
+def piece_push_blocks():
+    """떨어지는 블록 전체 네모가 플레이어와 겹칠 때만, 네 칸 각각에 대해 '플레이어 밀어내기'를 한다."""
     coarse = and_(
         and_(
-            gt(add(v("플레이어X"), 5), mul(v("블록열"), CELL)),
-            lt(sub(v("플레이어X"), 5), mul(add(v("블록열"), v("블록폭")), CELL)),
+            gt(add(v("플레이어X"), HALF_W), mul(v("블록열"), CELL)),
+            lt(sub(v("플레이어X"), HALF_W), mul(add(v("블록열"), v("블록폭")), CELL)),
         ),
         and_(
-            gt(add(v("플레이어Y"), 12), v("바닥Y")),
-            lt(add(v("플레이어Y"), 1), add(v("바닥Y"), mul(v("블록높이"), CELL))),
+            gt(add(v("플레이어Y"), PLAYER_H), v("바닥Y")),
+            lt(v("플레이어Y"), add(v("바닥Y"), mul(v("블록높이"), CELL))),
         ),
     )
-    fine = or_(or_(cell_hits_player(1), cell_hits_player(2)), or_(cell_hits_player(3), cell_hits_player(4)))
-    return [if_(coarse, [if_(fine, [setv("죽음원인", 2), setv("상태", OVER)])])]
+    body = []
+    for i in range(1, 5):
+        body += [
+            setv("칸왼쪽", mul(sub(v(f"칸X{i}"), 1), CELL)),
+            setv("칸아래", add(v("바닥Y"), mul(v(f"칸Y{i}"), CELL))),
+            call("플레이어 밀어내기"),
+        ]
+    return [if_(coarse, body)]
+
+
+def fn_push():
+    """떨어지는 블록의 한 칸(왼쪽 x = 칸왼쪽, 아래 y = 칸아래)과 플레이어가 겹치면, 가장 조금 움직이는 쪽으로 밀어낸다.
+    위로 밀리면 블록 위에 올라탄 것(같이 내려감), 아래로 밀리면 머리에 부딪힌 것. 밀린 곳이 막혀 있으면 끼여서 게임 끝."""
+    px, py = v("플레이어X"), v("플레이어Y")
+    overlap = and_(
+        and_(gt(add(px, HALF_W), add(v("칸왼쪽"), 0.01)), lt(sub(px, HALF_W), add(v("칸왼쪽"), CELL - 0.01))),
+        and_(gt(add(py, PLAYER_H), add(v("칸아래"), 0.01)), lt(py, add(v("칸아래"), CELL - 0.01))),
+    )
+    define_function(
+        "플레이어 밀어내기",
+        [
+            if_(
+                overlap,
+                [
+                    setv("밀위", sub(add(v("칸아래"), CELL), v("플레이어Y"))),
+                    setv("밀아래", sub(add(v("플레이어Y"), PLAYER_H), v("칸아래"))),
+                    setv("밀왼", sub(add(v("플레이어X"), HALF_W), v("칸왼쪽"))),
+                    setv("밀오른", sub(add(v("칸왼쪽"), CELL + HALF_W), v("플레이어X"))),
+                    setv("밀방향", 1),
+                    setv("최소밀기", v("밀위")),
+                    if_(lt(v("밀아래"), v("최소밀기")), [setv("최소밀기", v("밀아래")), setv("밀방향", 2)]),
+                    if_(lt(v("밀왼"), v("최소밀기")), [setv("최소밀기", v("밀왼")), setv("밀방향", 3)]),
+                    if_(lt(v("밀오른"), v("최소밀기")), [setv("밀방향", 4)]),
+                    # 바닥에 선 채로 머리 위에서 블록이 내려올 때: 몸이 절반도 안 걸쳤으면 깔리지 않고 옆으로 밀려난다
+                    if_(
+                        and_(eq(v("밀방향"), 2), eq(v("땅에닿음"), 1)),
+                        [
+                            if_else(
+                                lt(v("밀왼"), v("밀오른")),
+                                [if_(lt(v("밀왼"), HALF_W + 1), [setv("밀방향", 3)])],
+                                [if_(lt(v("밀오른"), HALF_W + 1), [setv("밀방향", 4)])],
+                            )
+                        ],
+                    ),
+                    # 바로 전 프레임에 블록 위쪽에 있었다면 무조건 올라탄다
+                    if_(
+                        ge(v("이전플레이어Y"), sub(add(v("칸아래"), CELL), 0.5)),
+                        [setv("밀방향", 1)],
+                    ),
+                    if_(
+                        eq(v("밀방향"), 1),
+                        [
+                            setv("플레이어Y", add(v("플레이어Y"), v("밀위"))),
+                            if_(lt(v("속도Y"), mul(v("낙하속도"), -1)), [setv("속도Y", mul(v("낙하속도"), -1))]),
+                            setv("땅에닿음", 1),
+                        ],
+                    ),
+                    if_(
+                        eq(v("밀방향"), 2),
+                        [
+                            setv("플레이어Y", sub(v("플레이어Y"), v("밀아래"))),
+                            if_(gt(v("속도Y"), mul(v("낙하속도"), -1)), [setv("속도Y", mul(v("낙하속도"), -1))]),
+                        ],
+                    ),
+                    if_(eq(v("밀방향"), 3), [setv("플레이어X", sub(v("플레이어X"), v("밀왼"))), setv("속도X", 0)]),
+                    if_(eq(v("밀방향"), 4), [setv("플레이어X", add(v("플레이어X"), v("밀오른"))), setv("속도X", 0)]),
+                    call("끼임 검사"),
+                ],
+            )
+        ],
+    )
+
+
+def fn_crush():
+    """밀려난 플레이어 자리에 이미 쌓인 블록이 있으면 = 블록 사이에 끼인 것."""
+    define_function(
+        "끼임 검사",
+        [
+            setv("끼임줄1", slot_base(floor(div(v("플레이어Y"), CELL)))),
+            setv("끼임줄2", slot_base(floor(div(add(v("플레이어Y"), PLAYER_H - 0.1), CELL)))),
+            setv("끼임칸1", floor(div(sub(v("플레이어X"), HALF_W - 0.1), CELL))),
+            setv("끼임칸2", floor(div(add(v("플레이어X"), HALF_W - 0.1), CELL))),
+            if_(
+                gt(
+                    add(
+                        add(grid_at("끼임줄1", "끼임칸1"), grid_at("끼임줄1", "끼임칸2")),
+                        add(grid_at("끼임줄2", "끼임칸1"), grid_at("끼임줄2", "끼임칸2")),
+                    ),
+                    0,
+                ),
+                [setv("죽음원인", 2), setv("상태", OVER)],
+            ),
+        ],
+    )
 
 
 def define_all_functions():
+    fn_dust()
+    fn_crush()
+    fn_push()
     fn_alloc_row()
     fn_reset()
     fn_input()
@@ -661,6 +895,7 @@ def scripts_manager():
                     eq(v("상태"), PLAYING),
                     [
                         chg("프레임", 1),
+                        setv("이전플레이어Y", v("플레이어Y")),
                         call("키 입력 처리"),
                         call("좌우로 움직이기"),
                         call("점프와 중력"),
@@ -673,7 +908,11 @@ def scripts_manager():
                 setv("신기록", 0),
                 if_(gt(v("점수"), v("최고점수")), [setv("신기록", 1), setv("최고점수", v("점수"))]),
                 broadcast("게임 끝"),
-                wait(1.2),
+                # 화면 흔들림
+                setv("흔들기준", v("카메라Y")),
+                repeat(14, [setv("카메라Y", add(v("흔들기준"), rand(-2.5, 2.5)))]),
+                setv("카메라Y", v("흔들기준")),
+                wait(1.0),
                 if_(eq(v("신기록"), 1), [play(snd_id("manager", "신기록"))]),
                 wait_until(not_(jump_key())),
                 wait_until(jump_key()),
@@ -683,10 +922,32 @@ def scripts_manager():
     return [thread(40, 40, main)]
 
 
+def image_size(obj, name):
+    """엔트리 '크기' 값 (그림 가로·세로 평균 × 0.5배)."""
+    d = next(p["dimension"] for p in PIC[obj] if p["name"] == name)
+    return (d["width"] + d["height"]) / 2 * 0.5
+
+
+def pop_in(name, size):
+    """크게 나타났다가 부드럽게 제자리 크기로 줄어드는 연출 (10프레임)."""
+    return [
+        shape_id(pic_id("overlay", name)),
+        set_size(size * 1.7),
+        repeat(10, [set_size(add(self_value("size"), mul(sub(size, self_value("size")), 0.32)))]),
+        set_size(size),
+    ]
+
+
 def scripts_overlay():
+    title_size = image_size("overlay", "타이틀")
+    count_size = image_size("overlay", "셋")
+    over_size = image_size("overlay", "게임오버_블록")
+    beep = snd_id("overlay", "삐")
     t_run = [when_run(), hide()]
     t_title = [
         when_message("타이틀"),
+        clear_effects(),
+        set_size(title_size),
         locate_xy(0, 5),
         shape_id(pic_id("overlay", "타이틀")),
         show(),
@@ -697,46 +958,63 @@ def scripts_overlay():
                 chg("깜빡", 1),
                 if_(eq(v("깜빡"), 30), [shape_id(pic_id("overlay", "타이틀_깜빡"))]),
                 if_(ge(v("깜빡"), 60), [shape_id(pic_id("overlay", "타이틀")), setv("깜빡", 0)]),
+                # 둥실둥실 떠 있는 느낌
+                locate_y(add(5, mul(2.5, sin_(mul(v("깜빡"), 6))))),
             ],
         ),
     ]
     t_ready = [when_message("게임 준비"), hide()]
-    beep = snd_id("overlay", "삐")
     t_count = [
         when_message("카운트다운"),
+        clear_effects(),
         locate_xy(0, 30),
-        shape_id(pic_id("overlay", "셋")),
         show(),
         play(beep),
-        wait(0.6),
-        shape_id(pic_id("overlay", "둘")),
+        *pop_in("셋", count_size),
+        wait(0.43),
         play(beep),
-        wait(0.6),
-        shape_id(pic_id("overlay", "하나")),
+        *pop_in("둘", count_size),
+        wait(0.43),
         play(beep),
-        wait(0.6),
-        shape_id(pic_id("overlay", "출발")),
+        *pop_in("하나", count_size),
+        wait(0.43),
         play(snd_id("overlay", "출발")),
+        *pop_in("출발", count_size),
     ]
-    t_start = [when_message("게임 시작"), wait(0.6), if_(eq(v("상태"), PLAYING), [hide()])]
+    t_start = [
+        when_message("게임 시작"),
+        wait(0.3),
+        repeat(12, [add_effect("transparency", 8.5)]),
+        if_(eq(v("상태"), PLAYING), [hide()]),
+        clear_effects(),
+    ]
     t_over = [
         when_message("게임 끝"),
         wait(0.8),
-        locate_xy(0, 10),
+        set_size(over_size),
         if_else(
             eq(v("죽음원인"), 1),
             [shape_id(pic_id("overlay", "게임오버_독극물"))],
             [shape_id(pic_id("overlay", "게임오버_블록"))],
         ),
+        locate_xy(0, 36),
+        set_effect("transparency", 100),
         show(),
+        # 위에서 미끄러져 내려오며 나타나기
+        repeat(
+            15,
+            [locate_y(add(self_value("y"), mul(sub(10, self_value("y")), 0.25))), add_effect("transparency", -6.7)],
+        ),
+        clear_effects(),
+        locate_y(10),
     ]
     return [
         thread(40, 40, t_run),
         thread(40, 140, t_title),
-        thread(40, 420, t_ready),
-        thread(420, 40, t_count),
-        thread(420, 520, t_start),
-        thread(420, 660, t_over),
+        thread(40, 460, t_ready),
+        thread(460, 40, t_count),
+        thread(460, 700, t_start),
+        thread(460, 880, t_over),
     ]
 
 
@@ -749,7 +1027,7 @@ def scripts_result():
             240,
             [
                 when_message("게임 끝"),
-                wait(0.8),
+                wait(1.1),
                 if_else(
                     eq(v("신기록"), 1),
                     [write_text(join("신기록! ", v("점수")))],
@@ -836,7 +1114,7 @@ def scripts_poison():
                     [
                         locate_y(sub(v("독극물Y"), add(v("카메라Y"), 135 + top_to_center))),
                         chg("물결타이머", 1),
-                        if_(ge(v("물결타이머"), 7), [setv("물결타이머", 0), next_shape()]),
+                        if_(ge(v("물결타이머"), 3), [setv("물결타이머", 0), next_shape()]),
                     ]
                 ),
             ],
@@ -850,14 +1128,70 @@ def scripts_player():
         clear_effects(),
         show(),
         setv("이전모양", 0),
+        setv("회전", 0),
+        setv("적용회전", 0),
+        setv("스핀", 0),
+        setv("찌그러짐", 0),
+        setv("이전땅", 1),
+        setv("이전속도Y", 0),
+        rotate_to(0),
         forever(
             [
-                locate_xy(sub(v("플레이어X"), -X_OFF), sub(v("플레이어Y"), add(v("카메라Y"), 135 - 8))),
+                # 빠르게 떨어지다 착지하면 찌그러지고 먼지가 난다
+                if_(
+                    and_(eq(v("땅에닿음"), 1), eq(v("이전땅"), 0)),
+                    [
+                        if_(
+                            lt(v("이전속도Y"), -2.5),
+                            [setv("찌그러짐", 7), *dust_request(v("플레이어X"), v("플레이어Y"), 1)],
+                        )
+                    ],
+                ),
+                setv("이전땅", v("땅에닿음")),
+                setv("이전속도Y", v("속도Y")),
+                # 2단 점프 하면 한 바퀴 돈다
+                if_(eq(v("회전요청"), 1), [setv("회전요청", 0), setv("스핀", 18), setv("스핀방향", v("방향"))]),
+                # 모양: 1 서기 / 3 점프 / 5 착지 / 7 걷기 (+1 은 왼쪽 보기), 9 쓰러짐
                 setv("모양번호", 1),
-                if_(lt(v("방향"), 0), [setv("모양번호", 2)]),
-                if_(eq(v("땅에닿음"), 0), [chg("모양번호", 2)]),
-                if_(eq(v("상태"), OVER), [setv("모양번호", 5)]),
+                if_else(
+                    eq(v("땅에닿음"), 0),
+                    [if_(gt(v("속도Y"), 0.5), [setv("모양번호", 3)])],
+                    [
+                        if_else(
+                            gt(v("찌그러짐"), 0),
+                            [setv("모양번호", 5), chg("찌그러짐", -1)],
+                            [
+                                if_else(
+                                    gt(abs_(v("속도X")), 0.8),
+                                    [
+                                        chg("걷기타이머", 1),
+                                        if_(eq(mod(floor(div(v("걷기타이머"), 6)), 2), 1), [setv("모양번호", 7)]),
+                                    ],
+                                    [setv("걷기타이머", 0)],
+                                )
+                            ],
+                        )
+                    ],
+                ),
+                if_(lt(v("방향"), 0), [chg("모양번호", 1)]),
+                if_(eq(v("상태"), OVER), [setv("모양번호", 9), setv("스핀", 0)]),
                 if_(ne(v("모양번호"), v("이전모양")), [shape(v("모양번호")), setv("이전모양", v("모양번호"))]),
+                # 걸을 때 살짝 기울고, 2단 점프 때는 18프레임 동안 한 바퀴
+                if_else(
+                    gt(v("스핀"), 0),
+                    [
+                        chg("스핀", -1),
+                        setv("회전", add(v("회전"), mul(20, v("스핀방향")))),
+                        if_(eq(v("스핀"), 0), [setv("회전", sub(v("회전"), mul(360, v("스핀방향"))))]),
+                    ],
+                    [setv("회전", add(v("회전"), mul(sub(mul(v("속도X"), 3), v("회전")), 0.25)))],
+                ),
+                if_(eq(v("상태"), OVER), [setv("회전", 0)]),
+                if_(
+                    gt(abs_(sub(v("회전"), v("적용회전"))), 0.3),
+                    [rotate_to(v("회전")), setv("적용회전", v("회전"))],
+                ),
+                locate_xy(sub(v("플레이어X"), -X_OFF), sub(v("플레이어Y"), add(v("카메라Y"), 135 - 8))),
             ]
         ),
     ]
@@ -868,8 +1202,72 @@ def scripts_player():
             [repeat(40, [setv("플레이어Y", sub(v("플레이어Y"), 0.35)), add_effect("transparency", 2.5)])],
         ),
     ]
-    reset = [when_message("게임 준비"), clear_effects()]
-    return [thread(40, 40, main), thread(40, 330, sink), thread(40, 470, reset)]
+    reset = [when_message("게임 준비"), clear_effects(), setv("스핀", 0), setv("회전", 0)]
+    return [thread(40, 40, main), thread(40, 760, sink), thread(40, 900, reset)]
+
+
+def scripts_dust():
+    def burst(vx, vy, both=True):
+        out = [setv("먼지vx", -vx), setv("먼지vy", vy), create_clone_self()]
+        if both:
+            out += [setv("먼지vx", vx), create_clone_self()]
+        return out
+
+    spawner = [
+        when_run(),
+        hide(),
+        forever(
+            [
+                # 먼지 부탁이 쌓여 있으면 한 프레임에 하나씩 꺼내서 만든다
+                if_(
+                    gt(list_len("먼지종류"), 0),
+                    [
+                        setv("먼지종류값", item("먼지종류", 1)),
+                        setv("먼지월드X", item("먼지X", 1)),
+                        setv("먼지월드Y", add(item("먼지Y", 1), 3)),
+                        remove_item("먼지X", 1),
+                        remove_item("먼지Y", 1),
+                        remove_item("먼지종류", 1),
+                        if_(eq(v("먼지종류값"), 1), burst(0.9, 0.25)),  # 플레이어 착지
+                        if_(eq(v("먼지종류값"), 2), burst(0.45, -0.05)),  # 점프
+                        if_(eq(v("먼지종류값"), 3), burst(0, -0.7, both=False)),  # 2단 점프 고리
+                        if_(eq(v("먼지종류값"), 4), burst(1.3, 0.2)),  # 블록 착지
+                    ],
+                )
+            ]
+        ),
+    ]
+    screen = (sub(v("먼지월드X"), -X_OFF), sub(v("먼지월드Y"), add(v("카메라Y"), 135)))
+    clone = [
+        when_clone(),
+        if_else(
+            eq(v("먼지종류값"), 3),
+            [shape_id(pic_id("dust", "고리")), set_size(15)],
+            [shape_id(pic_id("dust", "먼지")), set_size(7)],
+        ),
+        locate_xy(*screen),
+        show(),
+        repeat(
+            16,
+            [
+                setv("먼지월드X", add(v("먼지월드X"), v("먼지vx"))),
+                setv("먼지월드Y", add(v("먼지월드Y"), v("먼지vy"))),
+                locate_xy(*screen),
+                change_size(0.7),
+                add_effect("transparency", 6.2),
+            ],
+        ),
+        delete_clone(),
+    ]
+    reset = [
+        when_message("게임 준비"),
+        delete_clone(),
+        repeat_while(
+            gt(list_len("먼지종류"), 0),
+            [remove_item("먼지X", 1), remove_item("먼지Y", 1), remove_item("먼지종류", 1)],
+        ),
+    ]
+    return [thread(40, 40, spawner), thread(40, 600, clone), thread(40, 900, reset)]
 
 
 def scripts_piece():
@@ -933,8 +1331,8 @@ def scripts_piece():
                     eq(v("상태"), PLAYING),
                     [
                         *piece_fall_blocks(),
-                        # 떨어지는 블록에 깔렸는지 검사
-                        *piece_hit_blocks(),
+                        # 떨어지는 블록은 단단하다: 옆에서 막히고, 위에 올라탈 수 있고, 바닥과 사이에 끼면 끝
+                        *piece_push_blocks(),
                         if_(
                             lt(add(v("바닥Y"), mul(v("블록높이"), CELL)), sub(v("독극물Y"), 8)),
                             [delete_clone()],
@@ -1002,8 +1400,13 @@ def build_project():
         gauge_loop("비율_독", sub(div(v("독극물Y"), CELL), 1), gx - 12),
     )
     add_obj(sprite_object(OID["poison"], "독극물", PIC["poison"], [], 0, -300), scripts_poison())
-    add_obj(sprite_object(OID["player"], "플레이어", PIC["player"], [], 0, -109), scripts_player())
+    add_obj(sprite_object(OID["dust"], "먼지", PIC["dust"], [], 0, -300, visible=False), scripts_dust())
+    # 블록이 플레이어를 밀어낸 다음에 플레이어를 그리도록, 플레이어는 블록보다 목록 아래(뒤)에 둔다
     add_obj(sprite_object(OID["piece"], "블록", PIC["piece"], SND["piece"], 0, 200, visible=False), scripts_piece())
+    add_obj(
+        sprite_object(OID["player"], "플레이어", PIC["player"], [], 0, -109, rotate="free"),
+        scripts_player(),
+    )
     add_obj(sprite_object(OID["floor"], "바닥", PIC["floor"], [], 0, -126), scripts_floor())
     add_obj(sprite_object(OID["bg"], "배경", PIC["bg"], [], 0, 0), [])
 

@@ -253,30 +253,83 @@ def floor_image():
 
 # ------------------------------------------------------------------ 플레이어
 PLAYER = hexc("#ff4d3d")
+PLAYER_CANVAS = 24  # 플레이어 그림 크기(무대 px). 모든 자세의 발바닥이 같은 높이에 오도록 넉넉하게 둔다
+PLAYER_FOOT = 20  # 그림 위에서 발바닥까지 (그림 중심보다 8px 아래 = 판정 상자 바닥)
+
+# 자세별 몸 크기(가로, 세로): 점프할 때 늘어나고, 착지할 때 찌그러진다
+PLAYER_POSES = {
+    "normal": (16, 16),
+    "stretch": (13.6, 19.2),
+    "squash": (19.4, 12.6),
+    "walk": (16.8, 15.2),
+    "dead": (19, 12),
+}
 
 
-def player_image(facing=1, jumping=False, dead=False):
-    size = 16
-    cv = Canvas(size, size)
+def player_image(facing=1, pose="normal"):
+    cv = Canvas(PLAYER_CANVAS, PLAYER_CANVAS)
     lay = cv.layer()
     d = ImageDraw.Draw(lay)
     k = cv.k
+    w, h = PLAYER_POSES[pose]
+    cx = PLAYER_CANVAS / 2
+    x0, x1 = cx - w / 2, cx + w / 2
+    y1 = PLAYER_FOOT
+    y0 = y1 - h
+    dead = pose == "dead"
     body = PLAYER if not dead else hexc("#9aa0a8")
-    d.rounded_rectangle([0.6 * k, 0.6 * k, 15.4 * k, 15.4 * k], 4.2 * k, fill=shade(body, -0.45) + (255,))
-    fb = [0.6 * k, 0.6 * k, 15.4 * k, 13.6 * k]
+    r = min(w, h) * 0.27
+    d.rounded_rectangle([x0 * k, y0 * k, x1 * k, y1 * k], r * k, fill=shade(body, -0.45) + (255,))
+    fb = [x0 * k, y0 * k, x1 * k, (y1 - 1.8) * k]
     fw, fh = int(fb[2] - fb[0]), int(fb[3] - fb[1])
     g = vgradient((fw, fh), shade(body, 0.22) + (255,), shade(body, -0.05) + (255,))
-    lay.paste(g, (int(fb[0]), int(fb[1])), rrect_mask((fw, fh), [0, 0, fw - 1, fh - 1], 4.2 * k))
-    d.rounded_rectangle([2.4 * k, 1.5 * k, 7.0 * k, 2.8 * k], 0.6 * k, fill=(255, 255, 255, 120))
-    ey = 5.0 if not jumping else 3.6
+    lay.paste(g, (int(fb[0]), int(fb[1])), rrect_mask((fw, fh), [0, 0, fw - 1, fh - 1], r * k))
+    d.rounded_rectangle([(x0 + 1.8) * k, (y0 + 0.9) * k, (x0 + 1.8 + w * 0.3) * k, (y0 + 2.2) * k], 0.6 * k,
+                        fill=(255, 255, 255, 120))
+    # 눈
     if dead:
-        for ex in (4.6, 10.2):
-            d.line([(ex - 1.6) * k, (ey) * k, (ex + 1.6) * k, (ey + 3.4) * k], fill=(40, 40, 50, 255), width=int(1.3 * k))
-            d.line([(ex + 1.6) * k, (ey) * k, (ex - 1.6) * k, (ey + 3.4) * k], fill=(40, 40, 50, 255), width=int(1.3 * k))
+        ey = y0 + h * 0.3
+        for ex in (cx - 2.8, cx + 2.8):
+            for a, b in (((-1.5, 0), (1.5, 3.0)), ((1.5, 0), (-1.5, 3.0))):
+                d.line([(ex + a[0]) * k, (ey + a[1]) * k, (ex + b[0]) * k, (ey + b[1]) * k],
+                       fill=(40, 40, 50, 255), width=int(1.2 * k))
     else:
-        shift = 1.6 * facing
-        for ex in (5.2 + shift, 10.8 + shift):
-            d.rounded_rectangle([(ex - 1.2) * k, ey * k, (ex + 1.2) * k, (ey + 3.8) * k], 0.9 * k, fill=(255, 255, 255, 255))
+        eye_w, eye_h, ey = 2.4, 3.8, y0 + h * 0.28
+        if pose == "stretch":
+            eye_w, eye_h, ey = 2.2, 4.4, y0 + h * 0.18
+        elif pose == "squash":
+            eye_w, eye_h, ey = 2.8, 2.4, y0 + h * 0.3
+        shift = (1.6 if pose != "walk" else 2.1) * facing
+        gap = w * 0.175
+        for ex in (cx - gap + shift, cx + gap + shift):
+            d.rounded_rectangle([(ex - eye_w / 2) * k, ey * k, (ex + eye_w / 2) * k, (ey + eye_h) * k],
+                                0.9 * k, fill=(255, 255, 255, 255))
+    cv.paste(lay)
+    return cv.final()
+
+
+def dust_puff():
+    """착지·점프할 때 퍼지는 작은 먼지."""
+    cv = Canvas(12, 12)
+    lay = cv.layer()
+    d = ImageDraw.Draw(lay)
+    k = cv.k
+    for i in range(12, 0, -1):
+        a = int(205 * (1 - i / 12) ** 0.8)
+        rr = i / 2
+        d.ellipse([(6 - rr) * k, (6 - rr) * k, (6 + rr) * k, (6 + rr) * k], fill=(235, 240, 255, a))
+    cv.paste(lay.filter(ImageFilter.GaussianBlur(0.6 * k)))
+    return cv.final()
+
+
+def dust_ring():
+    """2단 점프할 때 발밑에 퍼지는 고리."""
+    cv = Canvas(26, 10)
+    lay = cv.layer()
+    d = ImageDraw.Draw(lay)
+    k = cv.k
+    d.ellipse([1.5 * k, 1.5 * k, 24.5 * k, 8.5 * k], outline=(140, 245, 255, 235), width=int(1.4 * k))
+    cv.paste(glow(lay, 1.2 * k, 1.1))
     cv.paste(lay)
     return cv.final()
 
@@ -286,7 +339,10 @@ POISON_W, POISON_H = 180, 300
 POISON_SURFACE = 16  # 그림 맨 위에서 수면(물결 중심)까지 (무대 px)
 
 
-def poison_image(phase):
+POISON_FRAMES = 12
+
+
+def poison_image(phase, frames=POISON_FRAMES):
     cv = Canvas(POISON_W, POISON_H)
     k = cv.k
     W, H = cv.img.size
@@ -295,8 +351,9 @@ def poison_image(phase):
     rnd = random.Random(7)
 
     def surf(xs):
-        return POISON_SURFACE + amp * math.sin((xs / wave_len + phase / 4.0) * 2 * math.pi) + 0.9 * math.sin(
-            (xs / 23.0 - phase / 4.0) * 2 * math.pi
+        t = phase / frames
+        return POISON_SURFACE + amp * math.sin((xs / wave_len + t) * 2 * math.pi) + 0.9 * math.sin(
+            (xs / 23.0 - t) * 2 * math.pi
         )
 
     # 수면 위로 번지는 초록 빛
@@ -334,7 +391,7 @@ def poison_image(phase):
     streak = cv.layer()
     sd = ImageDraw.Draw(streak)
     for i in range(9):
-        yy = POISON_SURFACE + 18 + i * 26 + (phase * 2.5) % 26
+        yy = POISON_SURFACE + 18 + i * 26 + (phase * 26.0 / frames) % 26
         xs = [(x * k, (yy + 3 * math.sin(x / 17.0 + i)) * k) for x in range(0, POISON_W + 1, 3)]
         sd.line(xs, fill=(8, 60, 12, 55), width=int(2.2 * k))
     streak = streak.filter(ImageFilter.GaussianBlur(1.2 * k))
@@ -346,8 +403,8 @@ def poison_image(phase):
     for i in range(16):
         bx = rnd.uniform(8, POISON_W - 8)
         base_y = rnd.uniform(POISON_SURFACE + 14, POISON_SURFACE + 150)
-        speed = rnd.uniform(1.5, 3.2)
-        by = base_y - (phase * speed) % 40
+        offset = rnd.uniform(0, 40)
+        by = base_y - (offset + phase * 40.0 / frames) % 40
         if by < POISON_SURFACE + 6:
             continue
         r = rnd.uniform(1.0, 3.2)
@@ -459,13 +516,13 @@ def background_image():
     small = font("logo", 7.5)
     keycap(cv, kl, sx(-205), sy(-72), 17, "<", small)
     keycap(cv, kl, sx(-185), sy(-72), 17, ">", small)
-    keycap(cv, kl, sx(-192), sy(-94), 32, "SPACE", font("logo", 6))
-    keycap(cv, kl, sx(-205), sy(-114), 17, "^", small)
+    keycap(cv, kl, sx(-199), sy(-94), 30, "SPACE", font("logo", 6))
+    keycap(cv, kl, sx(-173), sy(-94), 15, "^", small)
     cv.paste(kl)
     body = font("body", 10)
     cv.paste(text_layer(cv, "좌우 이동", body, sx(-168), sy(-72), (205, 212, 235, 255), anchor="lm"))
-    cv.paste(text_layer(cv, "점프", body, sx(-168), sy(-94), (205, 212, 235, 255), anchor="lm"))
-    cv.paste(text_layer(cv, "점프(위쪽키)", body, sx(-190), sy(-114), (150, 158, 185, 255), anchor="lm"))
+    cv.paste(text_layer(cv, "점프", body, sx(-160), sy(-94), (205, 212, 235, 255), anchor="lm"))
+    cv.paste(text_layer(cv, "공중에서 한 번 더 점프!", font("body", 9.5), sx(-165), sy(-115), (120, 225, 255, 255)))
 
     # 독극물 카드
     cv.paste(text_layer(cv, "독극물까지", font("body", 10), sx(165), sy(118), (120, 240, 110, 255)))
@@ -556,16 +613,16 @@ def title_card(blink):
     cv.paste(gradient_text(cv, "TETRO CLIMB", logo, 150, 38, (140, 245, 255, 255), (255, 120, 195, 255)))
     cv.paste(text_layer(cv, "테트로 클라임", font("title", 17), 150, 70, (240, 244, 255, 255)))
     body = font("body", 11.5)
-    cv.paste(text_layer(cv, "떨어지는 블록은 피하고, 쌓인 블록은 밟고 올라가요!", body, 150, 94, (200, 208, 232, 255)))
+    cv.paste(text_layer(cv, "떨어지는 블록 밑에 깔리지 않게 피하고, 블록을 밟고 올라가요!", body, 150, 94, (200, 208, 232, 255)))
     cv.paste(text_layer(cv, "아래에서 초록 독극물이 천천히 차오릅니다", body, 150, 110, (120, 245, 100, 255)))
     kl = cv.layer()
     small = font("logo", 7.5)
-    keycap(cv, kl, 70, 134, 17, "<", small)
-    keycap(cv, kl, 90, 134, 17, ">", small)
+    keycap(cv, kl, 58, 134, 17, "<", small)
+    keycap(cv, kl, 78, 134, 17, ">", small)
     keycap(cv, kl, 172, 134, 34, "SPACE", font("logo", 6))
     cv.paste(kl)
-    cv.paste(text_layer(cv, "이동", font("body", 11), 104, 134, (220, 226, 245, 255), anchor="lm"))
-    cv.paste(text_layer(cv, "점프", font("body", 11), 194, 134, (220, 226, 245, 255), anchor="lm"))
+    cv.paste(text_layer(cv, "이동", font("body", 11), 92, 134, (220, 226, 245, 255), anchor="lm"))
+    cv.paste(text_layer(cv, "점프, 2단 점프", font("body", 11), 194, 134, (220, 226, 245, 255), anchor="lm"))
     col = (255, 216, 74, 255) if not blink else (255, 216, 74, 110)
     cv.paste(text_layer(cv, "SPACE 키를 눌러 시작!", font("title", 14), 150, 165, col))
     return cv.final()
