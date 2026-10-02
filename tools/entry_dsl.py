@@ -385,6 +385,17 @@ def play(sound_id):
     return B("sound_something_with_block", [sound_ref(sound_id), None])
 
 
+def say(value, seconds=None):
+    """~을(를) 말하기. seconds 를 주면 그 시간 동안 말한 뒤 다음 블록으로 넘어간다."""
+    if seconds is None:
+        return B("dialog", [_val(value), "speak", None])
+    return B("dialog_time", [_val(value), _val(seconds), "speak", None])
+
+
+def remove_dialog():
+    return B("remove_dialog", [None])
+
+
 # ---------------------------------------------------------------- 이벤트 블록
 def when_run():
     return B("when_run_button_click", [None])
