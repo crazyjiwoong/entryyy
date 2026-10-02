@@ -93,8 +93,8 @@ X_OFF = -6 * CELL  # 월드 x -> 무대 x (0번 칸 왼쪽 = -108)
 HALF_W = 7  # 플레이어 판정 반폭
 PLAYER_H = 14  # 플레이어 판정 높이
 GRAVITY = 0.44
-JUMP_V = 6.8  # 첫 점프
-AIR_JUMP_V = 6.2  # 공중에서 한 번 더 (2단 점프)
+JUMP_V = 7.6  # 첫 점프
+AIR_JUMP_V = 7.0  # 공중에서 한 번 더 (2단 점프)
 MAX_FALL = 8
 MOVE_V = 2.4
 
