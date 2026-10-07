@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""테트로 클라임(.ent) 생성기.
+"""스피키 피하기(.ent) 생성기.
 
 실행:  python3 tools/build_tetro_climb.py
 결과:  tetro_climb.ent  (엔트리 오프라인 / playentry.org '오프라인 작품 불러오기'로 열기)
@@ -950,8 +950,8 @@ def build_project():
 
     add_obj(sprite_object(OID["manager"], "게임 관리자", PIC["manager"], SND["manager"], visible=False), scripts_manager())
     add_obj(
-        text_object(OID["title"], "제목 글상자", "테트로 클라임", 0, 45, 28),
-        scripts_message_box("테트로 클라임", "게임 오버!"),
+        text_object(OID["title"], "제목 글상자", "스피키 피하기", 0, 45, 28),
+        scripts_message_box("스피키 피하기", "게임 오버!"),
     )
     add_obj(
         text_object(OID["result"], "점수 글상자", "점수", 0, 12, 18, visible=False),
@@ -981,7 +981,7 @@ def build_project():
          "isCloud": False, "isRealTime": False, "cloudDate": False, "object": None, "x": 150, "y": -100},
     ]
     return {
-        "name": "테트로 클라임",
+        "name": "스피키 피하기",
         "objects": objects,
         "scenes": [{"id": SCENE_ID, "name": "장면 1"}],
         "variables": variables,
