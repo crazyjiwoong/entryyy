@@ -65,6 +65,7 @@ from entry_dsl import (  # noqa: E402
     remove_dialog,
     repeat,
     repeat_while,
+    round_,
     say,
     set_item,
     setv,
@@ -804,10 +805,11 @@ def scripts_player():
                 # 누른 방향키 쪽을 보게 모양을 바꾼다
                 if_(and_(key(KEY_LEFT), eq(v("보는방향"), 1)), [setv("보는방향", -1), shape_id(pic_id("player", "왼쪽"))]),
                 if_(and_(key(KEY_RIGHT), eq(v("보는방향"), -1)), face_right()),
-                # 그림 맨 아래(발)가 판정 상자 바닥(플레이어Y)에 오도록 그림 높이의 절반만큼 올려서 그린다
+                # 그림 맨 아래(발)가 판정 상자 바닥(플레이어Y)에 오도록 그림 높이의 절반만큼 올려서 그린다.
+                # 엔트리 캔버스 한 칸(무대 0.75px) 단위로 반올림해서 그림이 흐려지지 않게 한다
                 locate_xy(
-                    sub(v("플레이어X"), -X_OFF),
-                    sub(v("플레이어Y"), add(v("카메라Y"), 135 - art.PLAYER_SIZE / 2)),
+                    mul(round_(mul(sub(v("플레이어X"), -X_OFF), 4 / 3)), 0.75),
+                    mul(round_(mul(sub(v("플레이어Y"), add(v("카메라Y"), 135 - art.PLAYER_SIZE / 2)), 4 / 3)), 0.75),
                 ),
             ]
         ),

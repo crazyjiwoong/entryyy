@@ -7,7 +7,7 @@
 
 import os
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 CELL = 18  # 무대 기준 한 칸 크기(px)
 LINE = (40, 40, 40, 255)  # 테두리 색
@@ -74,7 +74,7 @@ def floor_image():
 
 # ------------------------------------------------------------------ 플레이어
 CHARACTER = os.path.join(os.path.dirname(__file__), "assets", "character.png")
-PLAYER_SIZE = 27  # 무대에서 보이는 캐릭터 높이(px). 판정 상자(14x14)보다 크게 그린다
+PLAYER_SIZE = 33  # 무대에서 보이는 캐릭터 높이(px). 판정 상자(14x14)보다 크게 그린다
 # 엔트리 무대 캔버스는 640x360 (무대 좌표의 4/3배) 이라서, 그림을 4/3배로 만들고 크기를 75% 로 두면
 # 엔트리가 그림을 다시 줄이거나 늘리지 않아 가장 선명하다
 PLAYER_SCALE = 0.75
@@ -86,8 +86,12 @@ def player_image(facing=1):
     src = Image.open(CHARACTER).convert("RGBA")
     src = src.crop(src.getchannel("A").getbbox())
     h = round(PLAYER_SIZE / PLAYER_SCALE)
-    img = src.resize((round(src.width * h / src.height), h), Image.LANCZOS)
-    return ImageOps.mirror(img) if facing < 0 else img
+    w = round(src.width * h / src.height / 2) * 2  # 가로를 짝수로 (중심이 픽셀 경계에 오게)
+    img = src.resize((w, h), Image.LANCZOS)
+    # 작게 줄이면 흐려지므로 윤곽을 살짝 또렷하게
+    rgb = ImageEnhance.Contrast(img.convert("RGB").filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=0))).enhance(1.08)
+    rgb.putalpha(img.getchannel("A"))
+    return ImageOps.mirror(rgb) if facing < 0 else rgb
 
 
 # ------------------------------------------------------------------ 독극물
