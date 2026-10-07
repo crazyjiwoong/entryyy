@@ -2,9 +2,12 @@
 
 엔트리 그림판에서 네모 도구로 그린 것처럼 단색 + 검은 테두리로만 그린다.
 그림 1px = 무대 1px (오브젝트 크기 100%).
+플레이어만 캐릭터 그림(tools/assets/character.png)을 줄여서 쓴다.
 """
 
-from PIL import Image, ImageDraw
+import os
+
+from PIL import Image, ImageDraw, ImageOps
 
 CELL = 18  # 무대 기준 한 칸 크기(px)
 LINE = (40, 40, 40, 255)  # 테두리 색
@@ -70,13 +73,21 @@ def floor_image():
 
 
 # ------------------------------------------------------------------ 플레이어
-def player_image():
-    img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, 15, 15], fill=(255, 50, 50, 255), outline=LINE, width=1)
-    d.rectangle([4, 4, 5, 7], fill=LINE)
-    d.rectangle([10, 4, 11, 7], fill=LINE)
-    return img
+CHARACTER = os.path.join(os.path.dirname(__file__), "assets", "character.png")
+PLAYER_SIZE = 27  # 무대에서 보이는 캐릭터 높이(px). 판정 상자(14x14)보다 크게 그린다
+# 엔트리 무대 캔버스는 640x360 (무대 좌표의 4/3배) 이라서, 그림을 4/3배로 만들고 크기를 75% 로 두면
+# 엔트리가 그림을 다시 줄이거나 늘리지 않아 가장 선명하다
+PLAYER_SCALE = 0.75
+
+
+def player_image(facing=1):
+    """캐릭터 그림(오른쪽 보기)을 줄인다. facing=-1 이면 좌우로 뒤집는다.
+    그림 맨 아래(무릎)가 판정 상자 바닥에 오도록, 투명한 여백 없이 잘라서 쓴다."""
+    src = Image.open(CHARACTER).convert("RGBA")
+    src = src.crop(src.getchannel("A").getbbox())
+    h = round(PLAYER_SIZE / PLAYER_SCALE)
+    img = src.resize((round(src.width * h / src.height), h), Image.LANCZOS)
+    return ImageOps.mirror(img) if facing < 0 else img
 
 
 # ------------------------------------------------------------------ 독극물

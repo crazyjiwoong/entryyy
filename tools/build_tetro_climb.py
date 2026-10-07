@@ -69,6 +69,7 @@ from entry_dsl import (  # noqa: E402
     set_item,
     setv,
     shape,
+    shape_id,
     show,
     sub,
     thread,
@@ -149,7 +150,7 @@ class Assets:
 A = Assets()
 
 
-def sprite_object(obj_id, name, pictures, sounds, x=0, y=0, visible=True):
+def sprite_object(obj_id, name, pictures, sounds, x=0, y=0, visible=True, scale=1):
     first = pictures[0]
     w, h = first["dimension"]["width"], first["dimension"]["height"]
     return {
@@ -167,8 +168,8 @@ def sprite_object(obj_id, name, pictures, sounds, x=0, y=0, visible=True):
             "y": y,
             "regX": w / 2,
             "regY": h / 2,
-            "scaleX": 1,
-            "scaleY": 1,
+            "scaleX": scale,
+            "scaleY": scale,
             "rotation": 0,
             "direction": 90,
             "width": w,
@@ -226,7 +227,7 @@ STATES = art.piece_states()  # 19가지 (종류, 회전, 칸, 폭, 높이)
 PIC = {
     "manager": [A.picture("관리자", art.blank())],
     "poison": [A.picture("독극물", art.poison_image())],
-    "player": [A.picture("플레이어", art.player_image())],
+    "player": [A.picture("오른쪽", art.player_image(1)), A.picture("왼쪽", art.player_image(-1))],
     # 모양 1~19: I1, I2, O1, T1 ... (블록모양 + 1 번째 모양)
     "piece": [
         A.picture(f"{kind}{rot + 1}", art.piece_image(cells, w, h, art.PIECE_COLORS[kind]))
@@ -236,6 +237,10 @@ PIC = {
     "bg": [A.picture("배경", art.background_image())],
 }
 SND = {"manager": [A.sound("점프"), A.sound("게임오버")]}
+
+
+def pic_id(obj, name):
+    return next(p["id"] for p in PIC[obj] if p["name"] == name)
 
 
 def snd_id(obj, name):
@@ -311,6 +316,8 @@ VARIABLES = [
     ("마지막블록Y", 0, "piece"),
     ("생성Y", 0, "piece"),
     ("기둥높이", 0, "piece"),
+    # 플레이어가 보는 방향 (1 오른쪽, -1 왼쪽)
+    ("보는방향", 1, "player"),
 ]
 # 무대에 보이는 변수 (엔트리 기본 변수 창). 좌표는 변수 창의 왼쪽 위 근처, y 는 아래로 갈수록 커진다
 SHOWN = {"점수": (-228, -112), "최고점수": (-228, -84)}
@@ -577,7 +584,9 @@ def piece_pick_blocks():
 def piece_fall_blocks():
     """아래 칸이 막혀 있으면 딱 맞게 내려앉아 격자와 열높이에 기록하고, 아니면 한 걸음 내려간다."""
     lookups = [item("격자", cell_index(i)) for i in range(1, 5)]
-    landed_top = add(v("기준줄"), sub(v("블록높이"), 1))
+    def landed_top():
+        return add(v("기준줄"), sub(v("블록높이"), 1))
+
     return [
         setv("다음Y", sub(v("바닥Y"), v("낙하속도"))),
         setv("기준줄", floor(div(v("다음Y"), CELL))),
@@ -594,7 +603,7 @@ def piece_fall_blocks():
                     )
                     for i in range(1, 5)
                 ],
-                if_(gt(landed_top, v("최고블록줄")), [setv("최고블록줄", landed_top)]),
+                if_(gt(landed_top(), v("최고블록줄")), [setv("최고블록줄", landed_top())]),
                 setv("블록상태", 1),
             ],
             [setv("바닥Y", v("다음Y"))],
@@ -627,10 +636,15 @@ def piece_push_blocks():
 def fn_push():
     """떨어지는 블록의 한 칸(왼쪽 x = 칸왼쪽, 아래 y = 칸아래)과 플레이어가 겹치면, 가장 조금 움직이는 쪽으로 밀어낸다.
     위로 밀리면 블록 위에 올라탄 것(같이 내려감), 아래로 밀리면 머리에 부딪힌 것. 밀린 곳이 막혀 있으면 끼여서 게임 끝."""
-    px, py = v("플레이어X"), v("플레이어Y")
+    def px():
+        return v("플레이어X")
+
+    def py():
+        return v("플레이어Y")
+
     overlap = and_(
-        and_(gt(add(px, HALF_W), add(v("칸왼쪽"), 0.01)), lt(sub(px, HALF_W), add(v("칸왼쪽"), CELL - 0.01))),
-        and_(gt(add(py, PLAYER_H), add(v("칸아래"), 0.01)), lt(py, add(v("칸아래"), CELL - 0.01))),
+        and_(gt(add(px(), HALF_W), add(v("칸왼쪽"), 0.01)), lt(sub(px(), HALF_W), add(v("칸왼쪽"), CELL - 0.01))),
+        and_(gt(add(py(), PLAYER_H), add(v("칸아래"), 0.01)), lt(py(), add(v("칸아래"), CELL - 0.01))),
     )
     define_function(
         "플레이어 밀어내기",
@@ -778,16 +792,31 @@ def scripts_message_box(title_text, over_text):
 
 
 def scripts_player():
+    def face_right():
+        return [setv("보는방향", 1), shape_id(pic_id("player", "오른쪽"))]
+
     main = [
         when_run(),
+        *face_right(),
         show(),
-        forever([locate_xy(sub(v("플레이어X"), -X_OFF), sub(v("플레이어Y"), add(v("카메라Y"), 135 - 8)))]),
+        forever(
+            [
+                # 누른 방향키 쪽을 보게 모양을 바꾼다
+                if_(and_(key(KEY_LEFT), eq(v("보는방향"), 1)), [setv("보는방향", -1), shape_id(pic_id("player", "왼쪽"))]),
+                if_(and_(key(KEY_RIGHT), eq(v("보는방향"), -1)), face_right()),
+                # 그림 맨 아래(발)가 판정 상자 바닥(플레이어Y)에 오도록 그림 높이의 절반만큼 올려서 그린다
+                locate_xy(
+                    sub(v("플레이어X"), -X_OFF),
+                    sub(v("플레이어Y"), add(v("카메라Y"), 135 - art.PLAYER_SIZE / 2)),
+                ),
+            ]
+        ),
     ]
     return [
         thread(40, 40, main),
-        thread(40, 220, [when_message("게임 시작"), say("출발!", 1)]),
-        thread(40, 320, [when_message("게임 끝"), say("으악!", 1)]),
-        thread(40, 420, [when_message("게임 준비"), remove_dialog()]),
+        thread(40, 300, [when_message("게임 시작"), say("출발!", 1)]),
+        thread(40, 400, [when_message("게임 끝"), say("으악!", 1)]),
+        thread(40, 500, [when_message("게임 준비"), remove_dialog(), *face_right()]),
     ]
 
 
@@ -851,13 +880,15 @@ def scripts_piece():
         ),
     ]
 
-    screen_y = sub(add(v("바닥Y"), mul(v("블록높이"), CELL / 2)), add(v("카메라Y"), 135))
+    def screen_y():
+        return sub(add(v("바닥Y"), mul(v("블록높이"), CELL / 2)), add(v("카메라Y"), 135))
+
     clone = [
         when_clone(),
         setv("블록상태", 0),
         shape(add(v("블록모양"), 1)),
         locate_x(add(add(mul(v("블록열"), CELL), mul(v("블록폭"), CELL / 2)), X_OFF)),
-        locate_y(screen_y),
+        locate_y(screen_y()),
         show(),
         # 떨어지는 동안 (한 바퀴 = 한 프레임)
         repeat_while(
@@ -875,7 +906,7 @@ def scripts_piece():
                         ),
                     ],
                 ),
-                locate_y(screen_y),
+                locate_y(screen_y()),
             ],
         ),
         # 내려앉은 뒤에는 카메라에 맞춰 움직이기만 한다
@@ -933,7 +964,10 @@ def build_project():
     add_obj(sprite_object(OID["poison"], "독극물", PIC["poison"], [], 0, -300), scripts_poison())
     # 블록이 플레이어를 밀어낸 다음에 플레이어를 그리도록, 플레이어는 블록보다 목록 아래(뒤)에 둔다
     add_obj(sprite_object(OID["piece"], "블록", PIC["piece"], [], 0, 200, visible=False), scripts_piece())
-    add_obj(sprite_object(OID["player"], "플레이어", PIC["player"], [], 0, -109), scripts_player())
+    add_obj(
+        sprite_object(OID["player"], "플레이어", PIC["player"], [], 0, CELL - 135 + art.PLAYER_SIZE / 2, scale=art.PLAYER_SCALE),
+        scripts_player(),
+    )
     add_obj(sprite_object(OID["floor"], "바닥", PIC["floor"], [], 0, -126), scripts_floor())
     add_obj(sprite_object(OID["bg"], "배경", PIC["bg"], [], 0, 0), [])
 
@@ -994,12 +1028,17 @@ def write_ent(project, ent_path, unpacked_dir=None):
 
 
 def count_blocks(project):
+    """블록 수를 센다. 같은 블록(id)을 두 곳에 넣으면 엔트리에서 고칠 때 꼬이므로 겹치면 멈춘다."""
     total = 0
+    seen = set()
 
     def walk(b):
         nonlocal total
         if isinstance(b, dict) and "type" in b:
             total += 1
+            if b["id"] in seen:
+                raise ValueError(f"블록 id 가 겹침: {b['id']} ({b['type']})")
+            seen.add(b["id"])
             for p in b.get("params", []):
                 walk(p)
             for st in b.get("statements", []):
@@ -1021,5 +1060,6 @@ if __name__ == "__main__":
     out = os.path.join(ROOT, "tetro_climb.ent")
     unpacked = sys.argv[1] if len(sys.argv) > 1 else None
     proj = build_project()
+    n_blocks = count_blocks(proj)
     write_ent(proj, out, unpacked)
-    print(f"{out}  ({os.path.getsize(out) / 1024:.0f} KB, 오브젝트 {len(proj['objects'])}개, 블록 {count_blocks(proj)}개)")
+    print(f"{out}  ({os.path.getsize(out) / 1024:.0f} KB, 오브젝트 {len(proj['objects'])}개, 블록 {n_blocks}개)")
